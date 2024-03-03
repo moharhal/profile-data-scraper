@@ -2,7 +2,20 @@ import requests
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from getprog.cassandra_connection import CassandraConnector
+from web_scraping.cassandra_connection import CassandraConnector
+import os
+
+import logging
+import sys
+
+PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "current_page.txt")
+# Set up logging
+logging.basicConfig(
+    filename="script.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    filemode="w",
+)
 
 
 def get_token(max_retries=100, backoff_factor=2):
@@ -40,7 +53,7 @@ def get_data(page, headers):
                 return "unauthorized"
             return response.json()
         except Exception as e:
-            print(f"Request failed: retrying ...")
+            logging.info("Request failed: retrying ...")
             time.sleep(3)  # Wait a bit before retrying
 
 
@@ -54,7 +67,7 @@ def get_profile(profile_id, headers):
                 return "unauthorized"
             return profile_response.json()
         except Exception as e:
-            print(f"Profile request failed: retrying ... ")
+            logging.info("Profile request failed: retrying ... ")
             time.sleep(3)  # Wait a bit before retrying
 
 
@@ -62,11 +75,8 @@ def process_profile(profile, headers):
     profile_id = profile["profile"]["id"]
     profile_data = get_profile(profile_id, headers)
 
-    if profile_data == "unauthorized":
-        return None
-
     while True:
-        if profile_data.get("profile"):
+        try:
             profile_data = profile_data.get("profile")
             profile_data["is_first_name_female"] = profile["profile"][
                 "is_first_name_female"
@@ -77,31 +87,44 @@ def process_profile(profile, headers):
             profile_data["match_score"] = profile.get("match_score")
             profile_data = json.dumps(profile_data)
             return profile_data
-        else:
-            print("Retrying profile request...")
+        except:
+            logging.info("Retrying profile request...")
             time.sleep(3)
+            headers = {"Authorization": f"{get_token()}"}
             profile_data = get_profile(profile_id, headers)
 
 
-def main():
-    cassandra_conn = CassandraConnector(keyspace="getprog_ia")
-    headers = {"Authorization": f"{get_token()}"}
-    page = 3183
+def read_page_from_file():
+    if os.path.exists(PAGE_FILE):
+        with open(PAGE_FILE, "r") as file:
+            return int(file.read().strip())
+    return 3193  # Default starting page
 
-    with ThreadPoolExecutor(max_workers=30) as executor:
+
+def write_page_to_file(page):
+    with open(PAGE_FILE, "w") as file:
+        file.write(str(page))
+
+
+def main():
+    cassandra_conn = CassandraConnector(keyspace="getprog_ia", logging=logging)
+    headers = {"Authorization": f"{get_token()}"}
+    page = read_page_from_file()
+
+    with ThreadPoolExecutor(max_workers=40) as executor:
         while page < 50000:
             response_json = get_data(page, headers)
 
             if response_json == "unauthorized":
-                print("Token expired. Refreshing token...")
+                logging.info("Token expired. Refreshing token...")
                 headers = {"Authorization": f"{get_token()}"}
                 continue
 
             if not response_json.get("results"):
-                print(f"No results found for page {page}.")
+                logging.info(f"No results found for page {page}.")
                 break
 
-            print(f"Processing page: {page}")
+            logging.info(f"Processing page: {page}")
             futures = [
                 executor.submit(process_profile, profile, headers)
                 for profile in response_json.get("results", [])
@@ -109,10 +132,13 @@ def main():
             for future in as_completed(futures):
                 profile_data = future.result()
                 if profile_data:
-                    cassandra_conn.insert_to_cassandra(profile_data)
+                    cassandra_conn.insert_to_cassandra(profile_data, logging)
 
             page += 1
+            write_page_to_file(page)
 
 
 if __name__ == "__main__":
+    unique_id = sys.argv[1]  # Get the unique identifier from the command line arguments
+    logging.info(f"Running script with unique ID: {unique_id}")
     main()
