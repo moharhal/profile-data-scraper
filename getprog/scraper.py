@@ -1,15 +1,15 @@
-import requests
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from web_scraping.cassandra_connection import CassandraConnector
-import os
-
+from getprog.cassandra_connection import CassandraConnector
+from getprog.utils import write_page_to_file, read_page_from_file
+from getprog.requests_ import *
 import logging
 import sys
+from typing import Dict, Any
 
-PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "current_page.txt")
-# Set up logging
+# Create a logger instance
+logger = logging.getLogger(__name__)
 logging.basicConfig(
     filename="script.log",
     level=logging.INFO,
@@ -18,62 +18,16 @@ logging.basicConfig(
 )
 
 
-def get_token(max_retries=100, backoff_factor=2):
+def process_profile(profile: Dict[str, Any], headers: Dict[str, Any]) -> str:
     """
-    Fetches the API token from endpoint with retry mechanism and exponential backoff.
+    Processes a profile by fetching additional data and formatting it for insertion into Cassandra.
 
-    :param max_retries: Maximum number of retries.
-    :param backoff_factor: Factor by which the delay between retries will increase.
+    :param profile: The profile data to process.
+    :param headers: The headers to use for the request.
+    :return: The formatted profile data as a JSON string.
     """
-
-    url = "https://mohalocal.loca.lt/token"
-    for attempt in range(max_retries):
-        response = requests.get(url, verify=False)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("token", "").strip()
-        else:
-            print(
-                f"Failed to fetch token: {response.status_code}, retrying... {attempt}"
-            )
-            time.sleep(backoff_factor**attempt)
-
-    print("Exceeded maximum retries, failed to fetch token.")
-    return ""
-
-
-def get_data(page, headers):
-    url = "https://api.app.getprog.ai/api/search/"
-    payload = {"page": page, "seniority": ["Senior"], "size": 100}
-
-    while True:
-        try:
-            response = requests.post(url, json=payload, headers=headers)
-            if response.status_code == 401:
-                return "unauthorized"
-            return response.json()
-        except Exception as e:
-            logging.info("Request failed: retrying ...")
-            time.sleep(3)  # Wait a bit before retrying
-
-
-def get_profile(profile_id, headers):
-    profile_url = f"https://api.app.getprog.ai/api/candidates/{profile_id}"
-
-    while True:
-        try:
-            profile_response = requests.get(profile_url, headers=headers)
-            if profile_response.status_code == 401:
-                return "unauthorized"
-            return profile_response.json()
-        except Exception as e:
-            logging.info("Profile request failed: retrying ... ")
-            time.sleep(3)  # Wait a bit before retrying
-
-
-def process_profile(profile, headers):
     profile_id = profile["profile"]["id"]
-    profile_data = get_profile(profile_id, headers)
+    profile_data = get_profile(profile_id, headers, logger)
 
     while True:
         try:
@@ -91,29 +45,22 @@ def process_profile(profile, headers):
             logging.info("Retrying profile request...")
             time.sleep(3)
             headers = {"Authorization": f"{get_token()}"}
-            profile_data = get_profile(profile_id, headers)
-
-
-def read_page_from_file():
-    if os.path.exists(PAGE_FILE):
-        with open(PAGE_FILE, "r") as file:
-            return int(file.read().strip())
-    return 3193  # Default starting page
-
-
-def write_page_to_file(page):
-    with open(PAGE_FILE, "w") as file:
-        file.write(str(page))
+            profile_data = get_profile(profile_id, headers, logger)
 
 
 def main():
-    cassandra_conn = CassandraConnector(keyspace="getprog_ia", logging=logging)
+    """
+    Main function that orchestrates the process of fetching, processing, and inserting profile data into Cassandra.
+    """
+    cassandra_conn = CassandraConnector(keyspace="getprog_ia", logging=logger)
     headers = {"Authorization": f"{get_token()}"}
-    page = read_page_from_file()
-
+    page: int = read_page_from_file()
+    counter = 0
     with ThreadPoolExecutor(max_workers=40) as executor:
+        page_resolt_check = 0
         while page < 50000:
-            response_json = get_data(page, headers)
+            print(page)
+            response_json = get_data(page, headers, logger)
 
             if response_json == "unauthorized":
                 logging.info("Token expired. Refreshing token...")
@@ -121,8 +68,11 @@ def main():
                 continue
 
             if not response_json.get("results"):
+                page_resolt_check += 1
                 logging.info(f"No results found for page {page}.")
-                break
+                if page_resolt_check == 10:
+                    page += 1
+                    continue
 
             logging.info(f"Processing page: {page}")
             futures = [
@@ -135,6 +85,10 @@ def main():
                     cassandra_conn.insert_to_cassandra(profile_data, logging)
 
             page += 1
+            counter += 1
+            if counter == 5:
+                print("======================= stop counter ")
+                break
             write_page_to_file(page)
 
 
