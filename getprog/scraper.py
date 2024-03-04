@@ -83,7 +83,7 @@ def main():
                 profile_data = future.result()
                 if profile_data:
                     cassandra_conn.insert_to_cassandra(profile_data)
-
+            page += 1
             write_page_to_file(page)
 
 
