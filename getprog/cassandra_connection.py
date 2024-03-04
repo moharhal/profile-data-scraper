@@ -6,7 +6,7 @@ class CassandraConnector:
     A class for connecting to and interacting with a Cassandra database.
     """
 
-    def __init__(self, keyspace: str, logging):
+    def __init__(self, keyspace: str):
         """
         Initializes a CassandraConnector instance.
 
@@ -16,21 +16,21 @@ class CassandraConnector:
         self.keyspace = keyspace
         self.cluster = Cluster(["127.0.0.1"], port=9042)
         self.session = self.cluster.connect(keyspace)
-        self.ensure_tables(logging)
-        self.prepare_query(logging)
+        self.ensure_tables()
+        self.prepare_query()
 
-    def prepare_query(self, logging):
+    def prepare_query(self):
         """
         Prepares the insert query.
         """
         insert_query = "INSERT INTO profiles JSON ?"
         try:
             self.prepared_stmt = self.session.prepare(insert_query)
-            logging.info("Query prepared.")
+            print("Query prepared.")
         except Exception as e:
-            logging.warning("Error preparing query: {e}")
+            print("Error preparing query: {e}")
 
-    def insert_to_cassandra(self, profile_json, logging):
+    def insert_to_cassandra(self, profile_json):
         """
         Inserts a JSON profile into the Cassandra database.
 
@@ -40,13 +40,13 @@ class CassandraConnector:
         while True:
             try:
                 self.session.execute(self.prepared_stmt, [profile_json])
-                logging.info("data inserted successfully")
+                print("data inserted successfully")
                 break
             except Exception as e:
-                logging.warning(f"Error inserting into Cassandra: {e}")
+                print(f"Error inserting into Cassandra: {e}")
                 continue
 
-    def ensure_tables(self, logging) -> None:
+    def ensure_tables(self) -> None:
         """Ensures that the necessary tables exist in the keyspace."""
         create_table_statements = [
             """
@@ -186,7 +186,7 @@ class CassandraConnector:
 
             try:
                 self.session.execute(statement)
-                logging.info("Table created or verified:")
+                print("Table created or verified:")
             except Exception as e:
-                logging.warning(f"Error inserting into Cassandra: {e}")
+                print(f"Error inserting into Cassandra: {e}")
                 raise

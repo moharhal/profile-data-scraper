@@ -1,7 +1,10 @@
 from typing import Dict, Any, Union
 import requests
 import time
-import logging
+from urllib3.exceptions import InsecureRequestWarning
+
+# Disable the warning
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 
 def get_token(max_retries: int = 100, backoff_factor: int = 2) -> str:
@@ -29,9 +32,7 @@ def get_token(max_retries: int = 100, backoff_factor: int = 2) -> str:
     return ""
 
 
-def get_profile(
-    profile_id: str, headers: Dict[str, Any], logging: logging.Logger
-) -> Union[Dict[str, Any], str]:
+def get_profile(profile_id: str, headers: Dict[str, Any]) -> Union[Dict[str, Any], str]:
     """
     Retrieves the profile information for a given profile ID.
 
@@ -50,13 +51,11 @@ def get_profile(
                 return "unauthorized"
             return profile_response.json()
         except Exception as e:
-            logging.info("Profile request failed: retrying ... ")
+            print("Profile request failed: retrying ... ")
             time.sleep(3)
 
 
-def get_data(
-    page: int, headers: Dict[str, Any], logging: logging.Logger
-) -> Union[Dict[str, Any], str]:
+def get_data(page: int, headers: Dict[str, Any]) -> Union[Dict[str, Any], str]:
     """
     Retrieves data for a given page with specified headers.
 
@@ -76,5 +75,5 @@ def get_data(
                 return "unauthorized"
             return response.json()
         except Exception as e:
-            logging.info("Request failed: retrying ...")
+            print("Request failed: retrying ...")
             time.sleep(3)
